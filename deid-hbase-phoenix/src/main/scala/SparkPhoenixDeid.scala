@@ -2,7 +2,7 @@ import java.sql.{Connection, DriverManager, ResultSet, SQLException}
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.functions.lit
+import org.apache.spark.sql.functions.udf
 
 /**
   * /usr/hdp/current/spark2-client/bin/spark-submit \
@@ -73,7 +73,7 @@ object SparkPhoenixDeid {
     var patientInfoDf = patientInfoRdd.toDF("id", "pid")
 
     // function that queries HBase for DeID matching patient ID
-    def getNextDeid() : Integer = {
+    def getNextDeid = () => {
       var deid: Integer = null
 
       // hbase master and znode.parent will be read from hbase-site.xml
@@ -95,9 +95,10 @@ object SparkPhoenixDeid {
 
       deid
     }
+    val deidUdf = udf(getNextDeid)
 
     // add new column to patient event data with DeID
-    patientInfoDf = patientInfoDf.withColumn("deid", lit(getNextDeid))
+    patientInfoDf = patientInfoDf.withColumn("deid", deidUdf())
 
     // write out for review
     patientInfoDf.rdd.saveAsTextFile("sampleDeid")
