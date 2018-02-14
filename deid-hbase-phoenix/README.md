@@ -32,7 +32,7 @@ This example assumes it is provided with raw patient event data -- some of the P
 1. `scan 'deidTable'`
 
 ### Run Spark job
-- `/usr/hdp/current/spark2-client/bin/spark-submit --master yarn --files /usr/hdp/current/hbase-client/conf/hbase-site.xml --class "SparkHbaseDeid" uber-deid-hbase-phoenix-0.1-SNAPSHOT.jar tableName columnFamily`
+- `/usr/hdp/current/spark2-client/bin/spark-submit --master yarn --files /usr/hdp/current/hbase-client/conf/hbase-site.xml --class "SparkHbaseDeid" uber-deid-hbase-phoenix-0.1-SNAPSHOT.jar deidTable deidCf`
 
 ## Output
 By default, the example jobs write output to HDFS for demonstration:
