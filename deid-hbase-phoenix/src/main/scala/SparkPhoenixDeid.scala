@@ -2,7 +2,7 @@ import java.sql.{Connection, DriverManager, ResultSet, SQLException}
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.functions.{col, udf}
+import org.apache.spark.sql.functions.lit
 
 /**
   * /usr/hdp/current/spark2-client/bin/spark-submit \
@@ -73,21 +73,19 @@ object SparkPhoenixDeid {
     var patientInfoDf = patientInfoRdd.toDF("id", "pid")
 
     // function that queries HBase for DeID matching patient ID
-    def queryDeid = (id: String) => {
+    def getNextDeid() : Integer = {
       var deid: Integer = null
 
       // hbase master and znode.parent will be read from hbase-site.xml
       val jdbcUrl = "jdbc:phoenix" //:hdp-ambari.internal.decisionlab.io:2181:/hbase-unsecure"
-      val sequenceQuery = "SELECT NEXT VALUE FOR " + sequenceSchema //ahinchliff_schema.seq_test"
       val connection = PhoenixConnectionSingleton.getConnectionInstance(jdbcUrl)
 
-      // don't see how to use a 'SELECT' statement with spark.read.jdbc() ?
-      //val connectionProperties = new Properties()
-      //val sequenceDF = spark.read.jdbc(jdbcUrl, sequenceQuery, connectionProperties)
-
+      // Phoenix Sequence query
+      val sequenceQuery = "SELECT NEXT VALUE FOR " + sequenceSchema
       val pstmt = connection.prepareStatement(sequenceQuery)
       val rs: ResultSet = pstmt.executeQuery
 
+      // get first result, and read what should be the only value
       rs.next()
       deid = rs.getInt(1)
 
@@ -97,10 +95,9 @@ object SparkPhoenixDeid {
 
       deid
     }
-    val deidUdf = udf(queryDeid)
 
     // add new column to patient event data with DeID
-    patientInfoDf = patientInfoDf.withColumn("deid", deidUdf(col("pid")))
+    patientInfoDf = patientInfoDf.withColumn("deid", lit(getNextDeid))
 
     // write out for review
     patientInfoDf.rdd.saveAsTextFile("sampleDeid")

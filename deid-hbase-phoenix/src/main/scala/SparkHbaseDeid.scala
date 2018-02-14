@@ -3,7 +3,7 @@ import java.util.UUID
 import org.apache.hadoop.hbase.client._
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.functions.{udf, _}
+import org.apache.spark.sql.functions.{udf, col}
 
 import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase.{HBaseConfiguration, TableName}
