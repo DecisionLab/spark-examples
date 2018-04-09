@@ -6,7 +6,6 @@
     <artifactId>hadoop-kerberos-relogin</artifactId>
     <version>0.1-SNAPSHOT</version>
 
-
     <properties>
         <hadoop-version>2.7.3</hadoop-version>
     </properties>
@@ -24,6 +23,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
+                <version>3.1.0</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -33,24 +33,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <filters>
-                        <filter>
-                            <artifact>*:*</artifact>
-                            <excludes>
-                                <exclude>META-INF/*.SF</exclude>
-                                <exclude>META-INF/*.DSA</exclude>
-                                <exclude>META-INF/*.RSA</exclude>
-                            </excludes>
-                        </filter>
-                    </filters>
-
                     <finalName>uber-hadoop-kerberos-relogin-0.1-SNAPSHOT</finalName>
-
-                    <transformers>
-                        <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                            <mainClass>org.apache.hadoop.security.KeytabRelogin</mainClass>
-                        </transformer>
-                    </transformers>
                 </configuration>
             </plugin>
             <plugin>
@@ -59,19 +42,59 @@
                 <version>2.4.0</version>
                 <extensions>true</extensions>
             </plugin>
+            <!--
+            We don't want to run the tests by default, as the Kerberos / MiniKDC tests take a long time.
+            Tests can be run by enabling the 'test' Profile, like `mvn clean package -Ptest`
+             -->
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.20.1</version>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- 'test' profile enables the running of tests, when desired -->
+        <profile>
+            <id>test</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <skip>false</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <dependencies>
         <dependency>
             <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-client</artifactId>
+            <artifactId>hadoop-common</artifactId>
             <version>${hadoop-version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-minikdc</artifactId>
             <version>${hadoop-version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.11</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>log4j</groupId>
+            <artifactId>log4j</artifactId>
+            <version>1.2.17</version>
         </dependency>
     </dependencies>
 
