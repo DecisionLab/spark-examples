@@ -13,6 +13,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -30,8 +31,8 @@ public class KeytabReloginTest {
     public static final String REALM = ORG_NAME + "." + ORG_DOMAIN;
     public static final String REALMED_PRINCIPAL = PRINCIPAL + "@" + REALM;
     public static final long REQUEST_TGT_FREQUENCY_SECONDS = 65;
-    public static final long TEST_KEYTAB_WAIT_SECONDS = RENEWABLE_LIFETIME_SECONDS + REQUEST_TGT_FREQUENCY_SECONDS; // UserGroupInformation.MIN_TIME_BEFORE_RELOGIN = 600
-    public static final long TEST_JAAS_WAIT_SECONDS = 600 + (REQUEST_TGT_FREQUENCY_SECONDS * 2); // UserGroupInformation.MIN_TIME_BEFORE_RELOGIN = 600
+    public static final long TEST_KEYTAB_WAIT_SECONDS = RENEWABLE_LIFETIME_SECONDS + REQUEST_TGT_FREQUENCY_SECONDS;
+    public static final long TEST_JAAS_WAIT_SECONDS = 600 + REQUEST_TGT_FREQUENCY_SECONDS; // UserGroupInformation.MIN_TIME_BEFORE_RELOGIN = 600
 
     private MiniKdc kdc;
     private File workDir;
@@ -61,7 +62,11 @@ public class KeytabReloginTest {
         // This is required, otherwise UGI will abort any attempt to loginUserFromKeytab
         org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
         conf.set(CommonConfigurationKeys.HADOOP_SECURITY_AUTHENTICATION, "kerberos");
+        UserGroupInformation.reset();
         UserGroupInformation.setConfiguration(conf);
+
+        // This only affects the Keytab Logins.
+        // The JAAS (Ticket Cache) logins are not affected by '.setShouldRenewImmediatelyForTests'
         UserGroupInformation.setShouldRenewImmediatelyForTests(true);
     }
 
@@ -71,8 +76,16 @@ public class KeytabReloginTest {
         if (null != kdc) {
             kdc.stop();
         }
+
+        // make sure UGI is reset between tests
+        UserGroupInformation.setLoginUser(null);
     }
 
+    /**
+     * In this test, UGI Keytab login was setup incorrectly.
+     * The _expected_ value is that we did _not_ successfully relogin to Kerberos
+     * @throws Exception
+     */
     @Test
     public void testKeytabLoginIncorrectly() throws Exception {
         KeytabRelogin keytabRelogin = new KeytabRelogin();
@@ -92,14 +105,24 @@ public class KeytabReloginTest {
 
         logger.info("Started renew thread, sleeping test until Renewable Lifetime has passed (" + TEST_KEYTAB_WAIT_SECONDS + " seconds) ...");
         Thread.sleep(TimeUnit.SECONDS.toMillis(TEST_KEYTAB_WAIT_SECONDS));
+        logger.info("Renewable Lifetime has passed.");
 
         // check value of (latest) Last Login
         long lastLogin = getUgiLastLogin();
 
-        logger.info("Renwable Lifetime has passed.");
-        assertTrue("Kerberos TGT login time was not updated.", lastLogin > initialLogin);
+        // In this test, UGI Keytab login was setup incorrectly.
+        // The _expected_ value is that we did _not_ successfully relogin to Kerberos
+        assertTrue("Kerberos TGT login time should not have been updated.", lastLogin == initialLogin);
+
+        // need to stop the relogin thread before the next test
+        keytabRelogin.stopRefreshing();
     }
 
+    /**
+     * In this test, our UGI Keytab login was setup correctly,
+     * so we should be able to update the Login time past the Renewable Lifetime
+     * @throws Exception
+     */
     @Test
     public void testKeytabLoginCorrectly() throws Exception {
 
@@ -114,6 +137,7 @@ public class KeytabReloginTest {
 
         // check value of (initial) Last Login
         long initialLogin = getUgiLastLogin();
+        long maxRenewableLogin = getMaxRenewableLogin(initialLogin);
 
         // start thread to perform periodic Re-Login
         keytabRelogin.startKeytabReloginThread(REQUEST_TGT_FREQUENCY_SECONDS);
@@ -121,17 +145,28 @@ public class KeytabReloginTest {
         logger.info("Started renew thread, sleeping test until Renewable Lifetime has passed (" +
                 TEST_KEYTAB_WAIT_SECONDS + " seconds) ...");
         Thread.sleep(TimeUnit.SECONDS.toMillis(TEST_KEYTAB_WAIT_SECONDS));
+        logger.info("Renewable Lifetime has passed.");
 
         // check value of (latest) Last Login
         long lastLogin = getUgiLastLogin();
 
-        logger.info("Renwable Lifetime has passed.");
+        // In this test, our UGI Keytab login was setup correctly,
+        // so we should be able to update the Login time past the Renewable Lifetime
         assertTrue("Kerberos TGT login time was not updated.", lastLogin > initialLogin);
+        assertTrue("Kerberos TGT login time was not updated past the Renewable Lifetime: " + maxRenewableLogin, lastLogin > maxRenewableLogin);
+
+        // need to stop the relogin thread before the next test
+        keytabRelogin.stopRefreshing();
     }
 
+    /**
+     * In this test, our JAAS (Keytab) login was setup correctly,
+     * so we should be able to update the Login time past the Renewable Lifetime
+     * @throws Exception
+     */
     @Test
     public void testJaasLogin() throws Exception {
-        KeytabRelogin keytabRelogin= new KeytabRelogin();
+        KeytabRelogin keytabRelogin = new KeytabRelogin();
 
         // setup Keytab
         File keytab = new File(workDir, "testUser.keytab");
@@ -145,6 +180,7 @@ public class KeytabReloginTest {
 
         // check value of (initial) Last Login
         long initialLogin = getUgiLastLogin();
+        long maxRenewableLogin = getMaxRenewableLogin(initialLogin);
 
         // start thread to perform periodic Re-Login
         keytabRelogin.startTicketCacheReloginThread(REQUEST_TGT_FREQUENCY_SECONDS);
@@ -152,25 +188,56 @@ public class KeytabReloginTest {
         logger.info("Started renew thread, sleeping test until Renewable Lifetime has passed (" +
                 TEST_JAAS_WAIT_SECONDS + " seconds) ...");
         Thread.sleep(TimeUnit.SECONDS.toMillis(TEST_JAAS_WAIT_SECONDS));
+        logger.info("Renewable Lifetime has passed.");
 
         // check value of (latest) Last Login
         long lastLogin = getUgiLastLogin();
 
-        logger.info("Renwable Lifetime has passed.");
+        // In this test, our JAAS (Keytab) login was setup correctly,
+        // so we should be able to update the Login time past the Renewable Lifetime
         assertTrue("Kerberos TGT login time was not updated.", lastLogin > initialLogin);
+        assertTrue("Kerberos TGT login time was not updated past the Renewable Lifetime: " + maxRenewableLogin, lastLogin > maxRenewableLogin);
+
+        // need to stop the relogin thread before the next test
+        keytabRelogin.stopRefreshing();
 
     }
 
+    /**
+     * Helper function to get LastLogin time from UGI
+     * @return
+     * @throws IOException
+     */
     private long getUgiLastLogin() throws IOException {
         UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
         return ugi.getSubject().getPrincipals(User.class).iterator().next().getLastLogin();
     }
 
     /**
+     * get an approximation of the end Time of the Renewable Lifetime
+     * @param initialLogin
+     * @return
+     */
+    private long getMaxRenewableLogin(long initialLogin) {
+        // initial time is often 0.  if so, set it to 'now'
+        if (0 == initialLogin){
+            initialLogin = ZonedDateTime.now().toInstant().toEpochMilli();
+            logger.info("Using 'now' for our initial time: " + initialLogin);
+        }
+
+        // make sure the new ticket login is a ticket Relogin, and not just a Renewal
+        long renewableLimit = initialLogin + TimeUnit.SECONDS.toMillis(RENEWABLE_LIFETIME_SECONDS);
+        logger.info("Using renewable limit: " + renewableLimit);
+
+        return renewableLimit;
+    }
+
+    /**
      * Setup JAAS configuration, without needing a JAAS.conf file, for testing purposes.
      * https://coderanch.com/t/134541/engineering/Setting-JAAS-Configuration-file-programmatically#3174490
-     * @return
+     *
      * @param keytab
+     * @return
      */
     private javax.security.auth.login.Configuration createJaasConfig(File keytab) {
 
@@ -183,7 +250,7 @@ public class KeytabReloginTest {
         options.put("Krb5LoginModule", "required");
         options.put("doNotPrompt", "true");
         options.put("principal", REALMED_PRINCIPAL);
-        options.put("useKeyTab" , "true");
+        options.put("useKeyTab", "true");
         options.put("keyTab", keytab.getPath());
         options.put("storeKey", "true");
 
@@ -200,7 +267,7 @@ public class KeytabReloginTest {
         return new javax.security.auth.login.Configuration() {
             @Override
             public AppConfigurationEntry[] getAppConfigurationEntry(String name) {
-                if (logger.isDebugEnabled()){
+                if (logger.isDebugEnabled()) {
                     logger.debug("Using JAAS Config Name " + name);
                 }
 

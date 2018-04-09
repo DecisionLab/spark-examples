@@ -33,6 +33,13 @@ public class KeytabRelogin {
         this.refresher = Executors.newSingleThreadScheduledExecutor();
     }
 
+    /**
+     * This example of logging in from Keytab looks correct, but it's missing an important step.
+     *
+     * @param keytab
+     * @param principal
+     * @throws IOException
+     */
     public void initKeytabLoginIncorrectly(File keytab, String principal) throws IOException {
         logger.info("Initializing Keytab Login, _without_ setting Login User ...");
 
@@ -40,8 +47,18 @@ public class KeytabRelogin {
 
         logger.info("Initial UGI is configured to login from keytab? " + ugi.isFromKeytab());
 
+        // the intial Login time always seems to be 0 here.
+        // trying to do a checkTGTAndReloginFromKeytab() doesn't update it.
+
     }
 
+    /**
+     * This example both logs in via UGI Keytab and sets the LoginUser in UGI.
+     * Both steps are required.
+     * @param keytab
+     * @param principal
+     * @throws IOException
+     */
     public void initKeytabLoginCorrectly(File keytab, String principal) throws IOException {
         logger.info("Initializing Keytab Login, including setting Login User ...");
 
@@ -50,8 +67,17 @@ public class KeytabRelogin {
 
         logger.info("Initial UGI is configured to login from keytab? " + ugi.isFromKeytab());
 
+        // the intial Login time always seems to be 0 here.
+        // trying to do a checkTGTAndReloginFromKeytab() doesn't update it.
+
     }
 
+    /**
+     * Start a thread to periodically Relogin to Kerberos via UGI
+     * http://richardstartin.uk/perpetual-kerberos-login-in-hadoop/
+     *
+     * @param requestTGTFrequencySeconds
+     */
     public void startKeytabReloginThread(long requestTGTFrequencySeconds) {
         this.renewal = refresher.scheduleWithFixedDelay(() -> {
             try {
@@ -68,14 +94,18 @@ public class KeytabRelogin {
                 logKeytabStatus();
 
             } catch (Exception e) {
-                //TODO: production code needs to handle this failure
-                logger.error("TODO: Exception from UGI checkTGTAndReloginFromKeytab needs to be handled better", e);
+                // this is probably not good.  rethrow it so it doesn't get lost
+                throw new RuntimeException(e);
             }
         }, requestTGTFrequencySeconds, requestTGTFrequencySeconds, TimeUnit.SECONDS);
     }
 
-
-
+    /**
+     * Start a thread to periodically Relogin to Kerberos via UGI.
+     * http://richardstartin.uk/perpetual-kerberos-login-in-hadoop/
+     *
+     * @param requestTGTFrequencySeconds
+     */
     public void startTicketCacheReloginThread(long requestTGTFrequencySeconds) {
         this.renewal = refresher.scheduleWithFixedDelay(() -> {
             try {
@@ -92,12 +122,17 @@ public class KeytabRelogin {
                 logKeytabStatus();
 
             } catch (Exception e) {
-                //TODO: production code needs to handle this failure
-                logger.error("TODO: Exception from UGI checkTGTAndReloginFromKeytab needs to be handled better", e);
+                // this is probably not good.  rethrow it so it doesn't get lost
+                throw new RuntimeException(e);
             }
         }, requestTGTFrequencySeconds, requestTGTFrequencySeconds, TimeUnit.SECONDS);
     }
 
+    /**
+     * Log a bunch of information about our UGI status
+     *
+     * @throws IOException
+     */
     private void logKeytabStatus() throws IOException {
         // Check the UGI for the "current user"
         UserGroupInformation newUgi = UserGroupInformation.getCurrentUser();
@@ -112,6 +147,13 @@ public class KeytabRelogin {
         logger.info("Latest Login: " + user.getLastLogin());
     }
 
+    /**
+     * This example logs in via the GSS-API (using JAAS), and then configures UGI for future relogin.
+     * https://community.hortonworks.com/articles/56702/a-secure-hdfs-client-example.html
+     *
+     * @throws IOException
+     * @throws LoginException
+     */
     public void initJaasLogin() throws IOException, LoginException {
         logger.info("Initializing JAAS Login");
 
@@ -120,28 +162,41 @@ public class KeytabRelogin {
         UserGroupInformation.loginUserFromSubject(lc.getSubject());
 
         // force set login time. make it easier to check Test pass/failure.
+        // only doing the initial loginUserFromSubject() seems to leave the time at 0.
+        // later, the first time we do a reloginFromTicketCache(), the time gets updated.
+        // We need to be comparing that the initial time is less than the final time,
+        // which can be difficult when the intial time is 0.
         UserGroupInformation.getCurrentUser().reloginFromTicketCache();
-
-        // If we could get the Path of the Keytab, we could configure UGI for keytab login
-        // But it doesn't seem to be possible
-        Set<KeyTab> keyTabs = lc.getSubject().getPrivateCredentials(KeyTab.class);
-        for (KeyTab keyTab : keyTabs) {
-            logger.info("KeyTab! " + keyTab.toString());
-        }
-        //UserGroupInformation.loginUserFromKeytab(keyTabs); // NOPE!
     }
 
+    /**
+     * Need to stop the renewal thread
+     */
+    public void stopRefreshing() {
+        if (null != this.renewal) {
+            this.renewal.cancel(true);
+        }
+    }
+
+    /**
+     * Use the GSS-API to do a `kinit`, using the JAAS config
+     * https://community.hortonworks.com/articles/56702/a-secure-hdfs-client-example.html
+     *
+     * @return
+     * @throws LoginException
+     */
     private LoginContext kinit() throws LoginException {
         LoginContext lc = new LoginContext(this.getClass().getSimpleName(), new CallbackHandler() {
             public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
-                for(Callback c : callbacks){
+                for (Callback c : callbacks) {
                     //if(c instanceof )
-                    if(c instanceof NameCallback)
+                    if (c instanceof NameCallback)
                         ((NameCallback) c).setName(PRINCIPAL);
-                    if(c instanceof PasswordCallback)
+                    if (c instanceof PasswordCallback)
                         ((PasswordCallback) c).setPassword("".toCharArray()); // empty password -- use keytab ?
                 }
-            }});
+            }
+        });
         lc.login();
         return lc;
     }
