@@ -8,12 +8,10 @@ package org.apache.hadoop.security;
 import org.apache.log4j.Logger;
 
 import javax.security.auth.callback.*;
-import javax.security.auth.kerberos.KeyTab;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
 import java.io.File;
 import java.io.IOException;
-import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;

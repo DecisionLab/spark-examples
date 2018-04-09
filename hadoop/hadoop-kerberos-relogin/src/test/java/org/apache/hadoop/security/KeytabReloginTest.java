@@ -226,10 +226,10 @@ public class KeytabReloginTest {
         }
 
         // make sure the new ticket login is a ticket Relogin, and not just a Renewal
-        long renewableLimit = initialLogin + TimeUnit.SECONDS.toMillis(RENEWABLE_LIFETIME_SECONDS);
-        logger.info("Using renewable limit: " + renewableLimit);
+        long renewableLifetime = initialLogin + TimeUnit.SECONDS.toMillis(RENEWABLE_LIFETIME_SECONDS);
+        logger.info("Using renewable lifetime indicator: " + renewableLifetime);
 
-        return renewableLimit;
+        return renewableLifetime;
     }
 
     /**
