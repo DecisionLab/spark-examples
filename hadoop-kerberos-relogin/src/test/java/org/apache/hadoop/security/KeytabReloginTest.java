@@ -8,15 +8,15 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import javax.security.auth.kerberos.KerberosTicket;
 import javax.security.auth.login.AppConfigurationEntry;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.ZonedDateTime;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertTrue;
@@ -82,49 +82,13 @@ public class KeytabReloginTest {
     }
 
     /**
-     * In this test, UGI Keytab login was setup incorrectly.
-     * The _expected_ value is that we did _not_ successfully relogin to Kerberos
+     * Demonstrate UGI TGT renewal and Relogin, past the Renewable Lifetime,
+     * using the Global UGI Login.
+     *
      * @throws Exception
      */
     @Test
-    public void testKeytabLoginIncorrectly() throws Exception {
-        KeytabRelogin keytabRelogin = new KeytabRelogin();
-
-        // setup Keytab
-        File keytab = new File(workDir, "testUser.keytab");
-        kdc.createPrincipal(keytab, PRINCIPAL);
-
-        // perform initial keytab login
-        keytabRelogin.initKeytabLoginIncorrectly(keytab, PRINCIPAL);
-
-        // check value of (initial) Last Login
-        long initialLogin = getUgiLastLogin();
-
-        // start thread to perform periodic Re-Login
-        keytabRelogin.startKeytabReloginThread(REQUEST_TGT_FREQUENCY_SECONDS);
-
-        logger.info("Started renew thread, sleeping test until Renewable Lifetime has passed (" + TEST_KEYTAB_WAIT_SECONDS + " seconds) ...");
-        Thread.sleep(TimeUnit.SECONDS.toMillis(TEST_KEYTAB_WAIT_SECONDS));
-        logger.info("Renewable Lifetime has passed.");
-
-        // check value of (latest) Last Login
-        long lastLogin = getUgiLastLogin();
-
-        // In this test, UGI Keytab login was setup incorrectly.
-        // The _expected_ value is that we did _not_ successfully relogin to Kerberos
-        assertTrue("Kerberos TGT login time should not have been updated.", lastLogin == initialLogin);
-
-        // need to stop the relogin thread before the next test
-        keytabRelogin.stopRefreshing();
-    }
-
-    /**
-     * In this test, our UGI Keytab login was setup correctly,
-     * so we should be able to update the Login time past the Renewable Lifetime
-     * @throws Exception
-     */
-    @Test
-    public void testKeytabLoginCorrectly() throws Exception {
+    public void testKeytabLoginGlobally() throws Exception {
 
         KeytabRelogin keytabRelogin = new KeytabRelogin();
 
@@ -133,7 +97,7 @@ public class KeytabReloginTest {
         kdc.createPrincipal(keytab, PRINCIPAL);
 
         // perform initial keytab login
-        keytabRelogin.initKeytabLoginCorrectly(keytab, PRINCIPAL);
+        keytabRelogin.initKeytabLoginGlobally(keytab, PRINCIPAL);
 
         // check value of (initial) Last Login
         long initialLogin = getUgiLastLogin();
@@ -157,6 +121,79 @@ public class KeytabReloginTest {
 
         // need to stop the relogin thread before the next test
         keytabRelogin.stopRefreshing();
+
+        // grab the actual Ticket (TGT) to check it's validity.
+        KerberosTicket ticket = getTGT(UserGroupInformation.getCurrentUser());
+        assertTrue("TGT is not current.", ticket.isCurrent());
+        assertTrue("TGT End Time is not past Renewable Lifetime.", ticket.getEndTime().after(Date.from(Instant.ofEpochMilli(maxRenewableLogin))));
+    }
+
+    /**
+     * Demonstrate UGI TGT renewal and Relogin, past the Renewable Lifetime,
+     * using the Local UGI Login.
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testKeytabLoginLocally() throws Exception {
+
+        KeytabRelogin keytabRelogin = new KeytabRelogin();
+
+        // setup Keytab
+        File keytab = new File(workDir, "testUser.keytab");
+        kdc.createPrincipal(keytab, PRINCIPAL);
+
+        // perform initial keytab login
+        UserGroupInformation ugi = keytabRelogin.initKeytabLoginLocally(keytab, PRINCIPAL);
+
+        // check value of (initial) Last Login
+        long initialLogin = getUgiLastLogin(ugi);
+        long maxRenewableLogin = getMaxRenewableLogin(initialLogin);
+
+        // start thread to perform periodic Re-Login
+        keytabRelogin.startKeytabReloginThread(ugi, REQUEST_TGT_FREQUENCY_SECONDS);
+
+        logger.info("Started renew thread, sleeping test until Renewable Lifetime has passed (" +
+                TEST_KEYTAB_WAIT_SECONDS + " seconds) ...");
+        Thread.sleep(TimeUnit.SECONDS.toMillis(TEST_KEYTAB_WAIT_SECONDS));
+        logger.info("Renewable Lifetime has passed.");
+
+        // check value of (latest) Last Login
+        long lastLogin = getUgiLastLogin(ugi);
+
+        // In this test, our UGI Keytab login was setup correctly,
+        // so we should be able to update the Login time past the Renewable Lifetime
+        assertTrue("Kerberos TGT login time was not updated.", lastLogin > initialLogin);
+        assertTrue("Kerberos TGT login time was not updated past the Renewable Lifetime: " + maxRenewableLogin, lastLogin > maxRenewableLogin);
+
+        // need to stop the relogin thread before the next test
+        keytabRelogin.stopRefreshing();
+
+        // grab the actual Ticket (TGT) to check it's validity.
+        KerberosTicket ticket = getTGT(ugi);
+        assertTrue("TGT is not current.", ticket.isCurrent());
+        assertTrue("TGT End Time is not past Renewable Lifetime.", ticket.getEndTime().after(Date.from(Instant.ofEpochMilli(maxRenewableLogin))));
+    }
+
+    /**
+     * This method is private in UserGroupInformation,
+     * but we can call getSubject() (protected), and get the TGT from that.
+     *
+     * @param ugi
+     * @return
+     */
+    private KerberosTicket getTGT(UserGroupInformation ugi) {
+        Set<KerberosTicket> tickets = ugi.getSubject()
+                .getPrivateCredentials(KerberosTicket.class);
+        for (KerberosTicket ticket : tickets) {
+            if (SecurityUtil.isOriginalTGT(ticket)) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Found tgt " + ticket);
+                }
+                return ticket;
+            }
+        }
+        return null;
     }
 
     /**
@@ -201,6 +238,14 @@ public class KeytabReloginTest {
         // need to stop the relogin thread before the next test
         keytabRelogin.stopRefreshing();
 
+        // grab the actual Ticket (TGT) to check it's validity.
+        KerberosTicket ticket = getTGT(UserGroupInformation.getCurrentUser());
+        // JAAS login doesn't provide UGI access to the TGT ?
+        if (null != ticket) {
+            assertTrue("TGT is not current.", ticket.isCurrent());
+            assertTrue("TGT End Time is not past Renewable Lifetime.", ticket.getEndTime().after(Date.from(Instant.ofEpochMilli(maxRenewableLogin))));
+        }
+
     }
 
     /**
@@ -210,6 +255,15 @@ public class KeytabReloginTest {
      */
     private long getUgiLastLogin() throws IOException {
         UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
+        return getUgiLastLogin(ugi);
+    }
+
+    /**
+     * Helper function to get LastLogin time from UGI
+     * @param ugi
+     * @return
+     */
+    private long getUgiLastLogin(UserGroupInformation ugi) {
         return ugi.getSubject().getPrincipals(User.class).iterator().next().getLastLogin();
     }
 
