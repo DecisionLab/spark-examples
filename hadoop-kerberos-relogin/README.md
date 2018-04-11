@@ -17,6 +17,7 @@ The JUnit tests provided in `KeytabReloginTest` exercise those methods, checking
 Two methods can be used to initiate Keytab login, by providing the Principal (user) and Keytab file.
 - `UserGroupInformation.loginUserFromKeytab()` is "global", meaning that the application only supports one user
 - `UserGroupInformation.loginUserFromKeytabAndReturnUGI()` is "localized", meaning that separate users can be supported, but references to the UGI must be passed around.
+
 This login can then be renewed using the method `checkTGTAndReloginFromKeytab()`.
 
 ### JAAS Relogin
