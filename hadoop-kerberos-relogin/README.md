@@ -10,14 +10,17 @@ To run the Tests, and demonstrate functionality, run Maven with the `test` Profi
 - `mvn clean package -Ptest`
 
 ## Methodology
-The `KeytabRelogin` class demonstrates several methods of acquiring and renewing Kerberos logins, one of which is known to not work.
+The `KeytabRelogin` class demonstrates several methods of acquiring and renewing Kerberos logins.
 The JUnit tests provided in `KeytabReloginTest` exercise those methods, checking for the _expected_ behavior, using MiniKDC as the Kerberos controller.
-(The test for the method that is known to not work will _pass_, which here indicates that Kerberos Relogin was _unsuccessful_, as expected.)
 
 ### Keytab Relogin
-The method `UserGroupInformation.loginUserFromKeytabAndReturnUGI()` can be used to initiate Keytab login, by providing the Principal (user) and Keytab file.
+Two methods can be used to initiate Keytab login, by providing the Principal (user) and Keytab file.
+- `UserGroupInformation.loginUserFromKeytab()` is "global", meaning that the application only supports one user
+- `UserGroupInformation.loginUserFromKeytabAndReturnUGI()` is "localized", meaning that separate users can be supported, but references to the UGI must be passed around.
+
 This login can then be renewed using the method `checkTGTAndReloginFromKeytab()`.
-Since the renewal is often handled by a separate thread that periodicially requests renewal, it is *required* to complete the UserGroupInformation configuration step of `UserGroupInformation.setLoginUser(ugi)` after the initial call to `loginUserFromKeytabAndReturnUGI()`.
+
+Note: it is not currently possible (Hadoop 2.7.3) to initiate a _Local_ UGI ReLogin when a Global UGI has already been configured.
 
 ### JAAS Relogin
 It is possible to perform the Kerberos login using a JAAS configuration file, specifying the Keytab and Principal in this configuration file.
@@ -46,6 +49,7 @@ Access to protected methods within `UserGroupInformation` is required, in order 
 - MiniKdc code, for configuration options: https://github.com/apache/hadoop/blob/trunk/hadoop-common-project/hadoop-minikdc/src/main/java/org/apache/hadoop/minikdc/MiniKdc.java
 - Example code using `UserGroupInformation.setLoginUser(ugi)`: http://richardstartin.uk/perpetual-kerberos-login-in-hadoop/
 - Example code using JAAS login: https://community.hortonworks.com/articles/56702/a-secure-hdfs-client-example.html
+- [Practical Kerberos with Apache HBase](https://www.slideshare.net/je2451/practical-kerberos-with-apache-hbase)
 - Compiling when using MiniKdc, using Maven. [Why can't maven find a bundle dependency?
 ](https://stackoverflow.com/a/20555114)
 >The problem is that maven doesn't know what the type "bundle" is. So you need to add a plugin that defines it, namely the maven-bundle-plugin. Notice that you also need to set the extensions property to true. So the POM should have something like

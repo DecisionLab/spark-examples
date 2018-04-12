@@ -19,8 +19,6 @@ import java.util.concurrent.TimeUnit;
 
 public class KeytabRelogin {
 
-    public static final String PRINCIPAL = "testUser";
-
     private final ScheduledExecutorService refresher;
     private volatile ScheduledFuture<?> renewal;
 
@@ -32,18 +30,18 @@ public class KeytabRelogin {
     }
 
     /**
-     * This example of logging in from Keytab looks correct, but it's missing an important step.
+     * Keytab login Globally to UserGroupInformation
      *
      * @param keytab
      * @param principal
      * @throws IOException
      */
-    public void initKeytabLoginIncorrectly(File keytab, String principal) throws IOException {
-        logger.info("Initializing Keytab Login, _without_ setting Login User ...");
+    public void initKeytabLoginGlobally(File keytab, String principal) throws IOException {
+        logger.info("Initializing Keytab Login globally ...");
 
-        UserGroupInformation ugi = UserGroupInformation.loginUserFromKeytabAndReturnUGI(principal, keytab.getPath());
+        UserGroupInformation.loginUserFromKeytab(principal, keytab.getPath());
 
-        logger.info("Initial UGI is configured to login from keytab? " + ugi.isFromKeytab());
+        logger.info("Initial UGI is configured to login from keytab? " + UserGroupInformation.isLoginKeytabBased());
 
         // the intial Login time always seems to be 0 here.
         // trying to do a checkTGTAndReloginFromKeytab() doesn't update it.
@@ -51,22 +49,22 @@ public class KeytabRelogin {
     }
 
     /**
-     * This example both logs in via UGI Keytab and sets the LoginUser in UGI.
-     * Both steps are required.
+     * Keytab login Locally to UserGroupInformation
+     * You will need to reference the returned UGI in order to renew / relogin
+     *
      * @param keytab
      * @param principal
+     * @return
      * @throws IOException
      */
-    public void initKeytabLoginCorrectly(File keytab, String principal) throws IOException {
-        logger.info("Initializing Keytab Login, including setting Login User ...");
+    public UserGroupInformation initKeytabLoginLocally(File keytab, String principal) throws IOException {
+        logger.info("Initializing Keytab Login locally ...");
 
         UserGroupInformation ugi = UserGroupInformation.loginUserFromKeytabAndReturnUGI(principal, keytab.getPath());
-        UserGroupInformation.setLoginUser(ugi); // This is the magic!
 
         logger.info("Initial UGI is configured to login from keytab? " + ugi.isFromKeytab());
 
-        // the intial Login time always seems to be 0 here.
-        // trying to do a checkTGTAndReloginFromKeytab() doesn't update it.
+        return ugi;
 
     }
 
@@ -76,26 +74,37 @@ public class KeytabRelogin {
      *
      * @param requestTGTFrequencySeconds
      */
-    public void startKeytabReloginThread(long requestTGTFrequencySeconds) {
+    public void startKeytabReloginThread(final UserGroupInformation ugi, long requestTGTFrequencySeconds) {
         this.renewal = refresher.scheduleWithFixedDelay(() -> {
             try {
-                UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
-
                 // log status before
-                logKeytabStatus();
+                logKeytabStatus(ugi);
 
                 // attempt a renewal / relogin
                 logger.info("Calling ugi.checkTGTAndReloginFromKeytab() ...");
                 ugi.checkTGTAndReloginFromKeytab();
 
                 // log status after
-                logKeytabStatus();
+                logKeytabStatus(ugi);
 
             } catch (Exception e) {
                 // this is probably not good.  rethrow it so it doesn't get lost
+                logger.error("Exception in Keytab Relogin Thread." , e);
                 throw new RuntimeException(e);
             }
         }, requestTGTFrequencySeconds, requestTGTFrequencySeconds, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Start a thread to periodically Relogin to Kerberos via UGI
+     * http://richardstartin.uk/perpetual-kerberos-login-in-hadoop/
+     *
+     * @param requestTGTFrequencySeconds
+     */
+    public void startKeytabReloginThread(long requestTGTFrequencySeconds) throws IOException {
+        UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
+
+        startKeytabReloginThread(ugi, requestTGTFrequencySeconds);
     }
 
     /**
@@ -121,6 +130,7 @@ public class KeytabRelogin {
 
             } catch (Exception e) {
                 // this is probably not good.  rethrow it so it doesn't get lost
+                logger.error("Exception in Ticket Cache Relogin Thread." , e);
                 throw new RuntimeException(e);
             }
         }, requestTGTFrequencySeconds, requestTGTFrequencySeconds, TimeUnit.SECONDS);
@@ -135,13 +145,22 @@ public class KeytabRelogin {
         // Check the UGI for the "current user"
         UserGroupInformation newUgi = UserGroupInformation.getCurrentUser();
 
+        logKeytabStatus(newUgi);
+    }
+
+    /**
+     * Log a bunch of information about our UGI status
+     *
+     * @throws IOException
+     */
+    private void logKeytabStatus(UserGroupInformation ugi) throws IOException {
         // These two methods to not indicate whether the Kerberos authentication is currently valid.
         // However, they do inidicate a pre-requisite for being able to Re-Login via keytab.
-        logger.info("new UGI is configured to login from keytab? " + newUgi.isFromKeytab());
-        logger.info("new UGI has Kerberos Credentials? " + newUgi.hasKerberosCredentials());
+        logger.info("new UGI is configured to login from keytab? " + ugi.isFromKeytab());
+        logger.info("new UGI has Kerberos Credentials? " + ugi.hasKerberosCredentials());
 
         // Log the (latest) Last Login time
-        User user = newUgi.getSubject().getPrincipals(User.class).iterator().next();
+        User user = ugi.getSubject().getPrincipals(User.class).iterator().next();
         logger.info("Latest Login: " + user.getLastLogin());
     }
 
@@ -152,18 +171,18 @@ public class KeytabRelogin {
      * @throws IOException
      * @throws LoginException
      */
-    public void initJaasLogin() throws IOException, LoginException {
+    public void initJaasLogin(String principal) throws IOException, LoginException {
         logger.info("Initializing JAAS Login");
 
         // Pull the login (keytab + principal) from the JAAS config file
-        LoginContext lc = kinit();
+        LoginContext lc = kinit(principal);
         UserGroupInformation.loginUserFromSubject(lc.getSubject());
 
         // force set login time. make it easier to check Test pass/failure.
         // only doing the initial loginUserFromSubject() seems to leave the time at 0.
         // later, the first time we do a reloginFromTicketCache(), the time gets updated.
         // We need to be comparing that the initial time is less than the final time,
-        // which can be difficult when the intial time is 0.
+        // which can be difficult when the initial time is 0.
         UserGroupInformation.getCurrentUser().reloginFromTicketCache();
     }
 
@@ -183,13 +202,13 @@ public class KeytabRelogin {
      * @return
      * @throws LoginException
      */
-    private LoginContext kinit() throws LoginException {
+    private LoginContext kinit(String principal) throws LoginException {
         LoginContext lc = new LoginContext(this.getClass().getSimpleName(), new CallbackHandler() {
             public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
                 for (Callback c : callbacks) {
                     //if(c instanceof )
                     if (c instanceof NameCallback)
-                        ((NameCallback) c).setName(PRINCIPAL);
+                        ((NameCallback) c).setName(principal);
                     if (c instanceof PasswordCallback)
                         ((PasswordCallback) c).setPassword("".toCharArray()); // empty password -- use keytab ?
                 }
