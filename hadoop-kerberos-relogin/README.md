@@ -20,6 +20,8 @@ Two methods can be used to initiate Keytab login, by providing the Principal (us
 
 This login can then be renewed using the method `checkTGTAndReloginFromKeytab()`.
 
+Note: it is not currently possible (Hadoop 2.7.3) to initiate a _Local_ UGI ReLogin when a Global UGI has already been configured.
+
 ### JAAS Relogin
 It is possible to perform the Kerberos login using a JAAS configuration file, specifying the Keytab and Principal in this configuration file.
 This method uses the GSS-API and a `LoginContext` for the initial Kerberos login, followed by `UserGroupInformation.loginUserFromSubject()`.

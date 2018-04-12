@@ -19,8 +19,6 @@ import java.util.concurrent.TimeUnit;
 
 public class KeytabRelogin {
 
-    public static final String PRINCIPAL = "testUser";
-
     private final ScheduledExecutorService refresher;
     private volatile ScheduledFuture<?> renewal;
 
@@ -76,7 +74,7 @@ public class KeytabRelogin {
      *
      * @param requestTGTFrequencySeconds
      */
-    public void startKeytabReloginThread(UserGroupInformation ugi, long requestTGTFrequencySeconds) {
+    public void startKeytabReloginThread(final UserGroupInformation ugi, long requestTGTFrequencySeconds) {
         this.renewal = refresher.scheduleWithFixedDelay(() -> {
             try {
                 // log status before
@@ -91,6 +89,7 @@ public class KeytabRelogin {
 
             } catch (Exception e) {
                 // this is probably not good.  rethrow it so it doesn't get lost
+                logger.error("Exception in Keytab Relogin Thread." , e);
                 throw new RuntimeException(e);
             }
         }, requestTGTFrequencySeconds, requestTGTFrequencySeconds, TimeUnit.SECONDS);
@@ -131,6 +130,7 @@ public class KeytabRelogin {
 
             } catch (Exception e) {
                 // this is probably not good.  rethrow it so it doesn't get lost
+                logger.error("Exception in Ticket Cache Relogin Thread." , e);
                 throw new RuntimeException(e);
             }
         }, requestTGTFrequencySeconds, requestTGTFrequencySeconds, TimeUnit.SECONDS);
@@ -171,11 +171,11 @@ public class KeytabRelogin {
      * @throws IOException
      * @throws LoginException
      */
-    public void initJaasLogin() throws IOException, LoginException {
+    public void initJaasLogin(String principal) throws IOException, LoginException {
         logger.info("Initializing JAAS Login");
 
         // Pull the login (keytab + principal) from the JAAS config file
-        LoginContext lc = kinit();
+        LoginContext lc = kinit(principal);
         UserGroupInformation.loginUserFromSubject(lc.getSubject());
 
         // force set login time. make it easier to check Test pass/failure.
@@ -202,13 +202,13 @@ public class KeytabRelogin {
      * @return
      * @throws LoginException
      */
-    private LoginContext kinit() throws LoginException {
+    private LoginContext kinit(String principal) throws LoginException {
         LoginContext lc = new LoginContext(this.getClass().getSimpleName(), new CallbackHandler() {
             public void handle(Callback[] callbacks) throws IOException, UnsupportedCallbackException {
                 for (Callback c : callbacks) {
                     //if(c instanceof )
                     if (c instanceof NameCallback)
-                        ((NameCallback) c).setName(PRINCIPAL);
+                        ((NameCallback) c).setName(principal);
                     if (c instanceof PasswordCallback)
                         ((PasswordCallback) c).setPassword("".toCharArray()); // empty password -- use keytab ?
                 }

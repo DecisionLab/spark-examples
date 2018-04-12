@@ -10,6 +10,7 @@ import org.junit.Test;
 
 import javax.security.auth.kerberos.KerberosTicket;
 import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.auth.login.LoginException;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -27,9 +28,7 @@ public class KeytabReloginTest {
     public static final int RENEWABLE_LIFETIME_SECONDS = 250;
     public static final String ORG_NAME = "DECISIONLAB";
     public static final String ORG_DOMAIN = "IO";
-    public static final String PRINCIPAL = "testUser";
     public static final String REALM = ORG_NAME + "." + ORG_DOMAIN;
-    public static final String REALMED_PRINCIPAL = PRINCIPAL + "@" + REALM;
     public static final long REQUEST_TGT_FREQUENCY_SECONDS = 65;
     public static final long TEST_KEYTAB_WAIT_SECONDS = RENEWABLE_LIFETIME_SECONDS + REQUEST_TGT_FREQUENCY_SECONDS;
     public static final long TEST_JAAS_WAIT_SECONDS = 600 + REQUEST_TGT_FREQUENCY_SECONDS; // UserGroupInformation.MIN_TIME_BEFORE_RELOGIN = 600
@@ -93,11 +92,12 @@ public class KeytabReloginTest {
         KeytabRelogin keytabRelogin = new KeytabRelogin();
 
         // setup Keytab
-        File keytab = new File(workDir, "testUser.keytab");
-        kdc.createPrincipal(keytab, PRINCIPAL);
+        String user = "globalUser";
+        File keytab = new File(workDir, user + ".keytab");
+        kdc.createPrincipal(keytab, user);
 
         // perform initial keytab login
-        keytabRelogin.initKeytabLoginGlobally(keytab, PRINCIPAL);
+        keytabRelogin.initKeytabLoginGlobally(keytab, user);
 
         // check value of (initial) Last Login
         long initialLogin = getUgiLastLogin();
@@ -136,15 +136,29 @@ public class KeytabReloginTest {
      */
     @Test
     public void testKeytabLoginLocally() throws Exception {
+        // UserGroupInformation doesn't work as expected, in that
+        // if a Global user has already been configured,
+        // then a Local user cannot checkTGTAndReloginFromKeytab()
+        // because some of the settings for the Global user interfere with the local user
+        try {
+            // set the Global login information to null
+            // This will cause an exception, but the important bits are cleared out before the Exception happens
+            UserGroupInformation.loginUserFromKeytab(null, null);
+        } catch (IOException e) {
+            // The exception we are expecting is a LoginException nested inside of an IOException
+            assertTrue("Caught unexpected exception: ", e.getCause() instanceof LoginException);
+            logger.info("Caught expected exception, clearing out Global user from UserGroupInformation.");
+        }
 
         KeytabRelogin keytabRelogin = new KeytabRelogin();
 
         // setup Keytab
-        File keytab = new File(workDir, "testUser.keytab");
-        kdc.createPrincipal(keytab, PRINCIPAL);
+        String user = "localUser";
+        File keytab = new File(workDir, user + ".keytab");
+        kdc.createPrincipal(keytab, user);
 
         // perform initial keytab login
-        UserGroupInformation ugi = keytabRelogin.initKeytabLoginLocally(keytab, PRINCIPAL);
+        UserGroupInformation ugi = keytabRelogin.initKeytabLoginLocally(keytab, user);
 
         // check value of (initial) Last Login
         long initialLogin = getUgiLastLogin(ugi);
@@ -199,6 +213,7 @@ public class KeytabReloginTest {
     /**
      * In this test, our JAAS (Keytab) login was setup correctly,
      * so we should be able to update the Login time past the Renewable Lifetime
+     *
      * @throws Exception
      */
     @Test
@@ -206,14 +221,15 @@ public class KeytabReloginTest {
         KeytabRelogin keytabRelogin = new KeytabRelogin();
 
         // setup Keytab
-        File keytab = new File(workDir, "testUser.keytab");
-        kdc.createPrincipal(keytab, PRINCIPAL);
+        String user = "jaasUser";
+        File keytab = new File(workDir, user + ".keytab");
+        kdc.createPrincipal(keytab, user);
 
         // Should we just write out the jaas.conf file? or try to read one in?
-        javax.security.auth.login.Configuration jaasConfig = createJaasConfig(keytab);
+        javax.security.auth.login.Configuration jaasConfig = createJaasConfig(keytab, user);
         javax.security.auth.login.Configuration.setConfiguration(jaasConfig);
 
-        keytabRelogin.initJaasLogin();
+        keytabRelogin.initJaasLogin(user);
 
         // check value of (initial) Last Login
         long initialLogin = getUgiLastLogin();
@@ -250,6 +266,7 @@ public class KeytabReloginTest {
 
     /**
      * Helper function to get LastLogin time from UGI
+     *
      * @return
      * @throws IOException
      */
@@ -260,6 +277,7 @@ public class KeytabReloginTest {
 
     /**
      * Helper function to get LastLogin time from UGI
+     *
      * @param ugi
      * @return
      */
@@ -269,12 +287,13 @@ public class KeytabReloginTest {
 
     /**
      * get an approximation of the end Time of the Renewable Lifetime
+     *
      * @param initialLogin
      * @return
      */
     private long getMaxRenewableLogin(long initialLogin) {
         // initial time is often 0.  if so, set it to 'now'
-        if (0 == initialLogin){
+        if (0 == initialLogin) {
             initialLogin = ZonedDateTime.now().toInstant().toEpochMilli();
             logger.info("Using 'now' for our initial time: " + initialLogin);
         }
@@ -291,9 +310,10 @@ public class KeytabReloginTest {
      * https://coderanch.com/t/134541/engineering/Setting-JAAS-Configuration-file-programmatically#3174490
      *
      * @param keytab
+     * @param user
      * @return
      */
-    private javax.security.auth.login.Configuration createJaasConfig(File keytab) {
+    private javax.security.auth.login.Configuration createJaasConfig(File keytab, String user) {
 
         // Create entry options.
         final Map<String, Object> options = new HashMap<>();
@@ -303,10 +323,11 @@ public class KeytabReloginTest {
         // options usually found in jaas.conf file
         options.put("Krb5LoginModule", "required");
         options.put("doNotPrompt", "true");
-        options.put("principal", REALMED_PRINCIPAL);
+        options.put("principal", user + "@" + REALM);
         options.put("useKeyTab", "true");
         options.put("keyTab", keytab.getPath());
         options.put("storeKey", "true");
+        options.put("refreshKrb5Config", "true"); // to enable resetting between tests: Set this to true, if you want the configuration to be refreshed before the login method is called.
 
 
         // Create entries.
