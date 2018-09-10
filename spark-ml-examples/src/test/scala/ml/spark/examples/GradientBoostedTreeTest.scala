@@ -10,11 +10,11 @@ class GradientBoostedTreeTest extends WordSpec
   with BeforeAndAfterAll
   with SparkSessionSetup {
 
-  "KafkaStreamingTest" should {
+  "GradientBoostedTreeTest" should {
     " parse cli args with just input " in {
 
-      val args_valid_input = Array("-input_location", "/mnt/data", "-output_location", "/mnt/data",
-        "-input_columns", "these are the input columns", "-label_column", "this_is_the_label_column")
+      val args_valid_input = Array("-train", "-input_location", "/mnt/data", "-results_output_location", "/mnt/data",
+        "-feature_columns", "these are the input columns", "-label_column", "this_is_the_label_column")
 
       GradientBoostedTree.parseCLIArgs(args_valid_input)
       GBTCLIArgs.input_location shouldBe "/mnt/data"
@@ -26,16 +26,17 @@ class GradientBoostedTreeTest extends WordSpec
           val args_missing_required = Array[String]()
           GradientBoostedTree.parseCLIArgs(args_missing_required)
         }
-      assert(caught.getMessage.equals("Option \"-input_columns\" is required"))
+      assert(caught.getMessage.equals("Option \"-feature_columns\" is required"))
     }
 
     "fail to parse args with missing dependency args " in {
       val caught =
         intercept[org.kohsuke.args4j.CmdLineException] {
-          val args_missing_required = Array[String]("-input_location", "/mnt/data", "-output_location", "/mnt/data",
-            "-input_columns", "these are the input columns", "-label_column", "this_is_the_label_column", "-storage_account", "my_account")
+          val args_missing_required = Array[String]("-train", "-input_location", "/mnt/data", "-results_output_location", "/mnt/data",
+            "-feature_columns", "these are the input columns", "-label_column", "this_is_the_label_column", "-storage_account", "my_account")
           GradientBoostedTree.parseCLIArgs(args_missing_required)
         }
+      println(caught.getMessage())
       assert(caught.getMessage.equals("option \"-storage_account\" requires the option(s) [-container, -mount_point, -secrets_blob_scope, -secrets_blob_key]"))
     }
   }

@@ -7,7 +7,7 @@ import org.apache.spark.ml.regression.{GBTRegressionModel, GBTRegressor}
 import org.apache.spark.ml.{Pipeline, PipelineModel}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.col
-import org.kohsuke.args4j.CmdLineParser
+import org.kohsuke.args4j.{CmdLineException, CmdLineParser}
 import org.kohsuke.args4j.spi.StringArrayOptionHandler
 
 import scala.collection.JavaConverters.seqAsJavaListConverter
@@ -45,6 +45,7 @@ object GBTCLIArgs {
 
   @org.kohsuke.args4j.Option(name = "-fit",
     forbids = Array("-train"),
+    depends = Array("-model_location"),
     usage = "Flags the run to be a fitting run")
   var fit: Boolean = false
 
@@ -55,7 +56,7 @@ object GBTCLIArgs {
 
   @org.kohsuke.args4j.Option(name = "-model_location",
     usage = "If training, location to output the trained model, if fitting, location of trained pipeline model")
-  var model_location: String = ""
+  var model_location: String = null
 
   @org.kohsuke.args4j.Option(name = "-results_output_location",
     required = true,
@@ -74,11 +75,35 @@ object GBTCLIArgs {
 
 }
 
+/**
+  * Example of a Spark Pipeline utilizing a gradient boosted tree for predictions.s
+  */
 object GradientBoostedTree {
 
   def parseCLIArgs(args: Array[String]) = {
     val parser = new CmdLineParser(GBTCLIArgs)
-    parser.parseArgument(seqAsJavaListConverter(args.toSeq).asJava)
+    try {
+      parser.parseArgument(seqAsJavaListConverter(args.toSeq).asJava)
+
+      println(s"storage_account: ${GBTCLIArgs.storage_account}  " +
+        s"\ncontainer: ${GBTCLIArgs.container} " +
+        s"\nmount_point: ${GBTCLIArgs.mount_point} " +
+        s"\nsecrets_blob_scope: ${GBTCLIArgs.secrets_blob_scope}" +
+        s"\nsecrets_blob_key: ${GBTCLIArgs.secrets_blob_key}" +
+        s"\ntrain: ${GBTCLIArgs.train}" +
+        s"\nfit: ${GBTCLIArgs.fit}" +
+        s"\ninput_location: ${GBTCLIArgs.input_location}" +
+        s"\nresults_output_location: ${GBTCLIArgs.results_output_location}" +
+        s"\nmodel_location: ${GBTCLIArgs.model_location}" +
+        s"\nfeature_columns: ${GBTCLIArgs.feature_columns}" +
+        s"\nlabel_column: ${GBTCLIArgs.label_column}"
+      )
+    } catch {
+      case e: CmdLineException => {
+        parser.printUsage(System.out)
+        throw e
+      }
+    }
 
     if (!(GBTCLIArgs.train || GBTCLIArgs.fit)) {
       throw new IllegalArgumentException("Must be training or fitting.")
@@ -86,37 +111,19 @@ object GradientBoostedTree {
   }
 
   def main(args: Array[String]): Unit = {
+
+    parseCLIArgs(args)
+
     val sparkSession = SparkSession
       .builder
       .appName("Gradient Boosted Tree")
       .getOrCreate()
-
-    parseCLIArgs(args)
-
-    println(s"storage_account: ${GBTCLIArgs.storage_account}  " +
-      s"\ncontainer: ${GBTCLIArgs.container} " +
-      s"\nmount_point: ${GBTCLIArgs.mount_point} " +
-      s"\nsecrets_blob_scope: ${GBTCLIArgs.secrets_blob_scope}" +
-      s"\nsecrets_blob_key: ${GBTCLIArgs.secrets_blob_key}" +
-      s"\ntrain: ${GBTCLIArgs.train}" +
-      s"\nfit: ${GBTCLIArgs.fit}" +
-      s"\ninput_location: ${GBTCLIArgs.input_location}" +
-      s"\nresults_output_location: ${GBTCLIArgs.results_output_location}" +
-      s"\nmodel_location: ${GBTCLIArgs.model_location}" +
-      s"\nfeature_columns: ${GBTCLIArgs.feature_columns}" +
-      s"\nlabel_column: ${GBTCLIArgs.label_column}"
-    )
 
     // Mount the blob into databricks if specified
     if (GBTCLIArgs.container != null) {
       mountBlobDatabricks(GBTCLIArgs.container, GBTCLIArgs.mount_point, GBTCLIArgs.storage_account,
         GBTCLIArgs.secrets_blob_scope, GBTCLIArgs.secrets_blob_key)
     }
-
-    // Set up assembler to assemble the input columns into a vector
-    val assembler = new VectorAssembler()
-      .setInputCols(GBTCLIArgs.feature_columns)
-      .setOutputCol("features")
 
     val data = sparkSession.read.parquet(GBTCLIArgs.input_location)
 
@@ -129,25 +136,18 @@ object GradientBoostedTree {
       trainingData = newTrainingData
       testData = newTestData
 
-      val gbt = new GBTRegressor()
-        .setLabelCol("label")
-        .setFeaturesCol("features")
-        .setMaxIter(10)
+      pipelineModel = train(trainingData)
 
-      val pipeline = new Pipeline()
-        .setStages(Array(assembler, gbt))
-
-      pipelineModel = pipeline.fit(trainingData)
-
-      pipelineModel.write.overwrite().save(GBTCLIArgs.model_location)
+      if (GBTCLIArgs.model_location != null) {
+        pipelineModel.write.overwrite().save(GBTCLIArgs.model_location)
+      }
+    } else {
+      pipelineModel = PipelineModel.load(GBTCLIArgs.model_location)
     }
-
-    pipelineModel = PipelineModel.load(GBTCLIArgs.model_location)
 
     val predictions = pipelineModel.transform(testData)
 
     var predictionsOutput = GBTCLIArgs.results_output_location
-
     if (!predictionsOutput.endsWith("/")) {
       predictionsOutput = predictionsOutput + "/"
     }
@@ -161,30 +161,39 @@ object GradientBoostedTree {
     predictions.write.parquet(GBTCLIArgs.results_output_location + format.format(new java.util.Date()) + flag)
 
     if (GBTCLIArgs.train) {
-      val evaluator = new RegressionEvaluator()
-        .setLabelCol("label")
-        .setPredictionCol("prediction")
-        .setMetricName("rmse")
-
-      val rmse = evaluator.evaluate(predictions)
-      println(s"Root Mean Squared Error (RMSE) on test data = $rmse")
-
-      val gbtModel = pipelineModel.stages(1).asInstanceOf[GBTRegressionModel]
-      println(s"Learned regression GBT model:\n ${gbtModel.toDebugString}")
+      evaluate(predictions, pipelineModel)
     }
   }
 
-  // TODO - Break it down into testable functions
-
   def train(data: DataFrame): PipelineModel = {
-    return null
+
+    // Set up assembler to assemble the input columns into a vector
+    val assembler = new VectorAssembler()
+      .setInputCols(GBTCLIArgs.feature_columns)
+      .setOutputCol("features")
+
+    val gbt = new GBTRegressor()
+      .setLabelCol("label")
+      .setFeaturesCol("features")
+      .setMaxIter(10)
+
+    val pipeline = new Pipeline()
+      .setStages(Array(assembler, gbt))
+
+    pipeline.fit(data)
   }
 
-  def fit(data: DataFrame, model: PipelineModel) = {
+  def evaluate(data: DataFrame, model: PipelineModel) = {
+    val evaluator = new RegressionEvaluator()
+      .setLabelCol("label")
+      .setPredictionCol("prediction")
+      .setMetricName("rmse")
 
-  }
+    val rmse = evaluator.evaluate(data)
+    println(s"Root Mean Squared Error (RMSE) on test data = $rmse")
 
-  def evaluate(data: DataFrame) = {
+    val gbtModel = model.stages(1).asInstanceOf[GBTRegressionModel]
+    println(s"Learned regression GBT model:\n ${gbtModel.toDebugString}")
 
   }
 }
